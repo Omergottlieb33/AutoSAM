@@ -101,7 +101,10 @@ def _build_sam(
     )
     sam.eval()
     if checkpoint is not None:
+        print ("loading state_dict")
         with open(checkpoint, "rb") as f:
             state_dict = torch.load(f)
+            print ("state_dict loaded")
         sam.load_state_dict(state_dict)
+        print ("sam loaded")
     return sam
