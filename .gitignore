@@ -8,3 +8,5 @@
 *.zip
 *.DS_Store
 *.jpeg
+
+results/
