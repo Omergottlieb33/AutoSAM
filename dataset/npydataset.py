@@ -63,7 +63,7 @@ class NpyDataset(Dataset):
         #     img_name,
         # )
         preprocessed_img = torch.tensor(img_1024).float()
-        preprocessed_mask = torch.tensor(gt2D[None, :, :]).long()
+        preprocessed_mask = torch.tensor(gt2D).float()
         tensor_original_size = torch.tensor([H, W])
         tensor_image_size = tensor_original_size
         return preprocessed_img, preprocessed_mask, tensor_original_size, tensor_image_size
