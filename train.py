@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 import os
+import json
 import numpy as np
 from models.model_single import ModelEmb
 from dataset.glas import get_glas_dataset
@@ -176,7 +177,6 @@ def inference_ds(ds, model, sam, transform, epoch, args):
                 epoch=epoch,
                 dice=np.mean(dice_list),
                 iou=np.mean(iou_list)))
-    model.train()
     return np.mean(iou_list)
 
 
@@ -233,14 +233,22 @@ def main(args=None, sam_args=None):
         single_epoch_output_path = os.path.join(args['run_output_path'], 'epoch' + str(epoch))
         train_single_epoch(ds, model.train(), sam.eval(), optimizer, transform, epoch, 
                            args['debug'], output_path=single_epoch_output_path)
-        with torch.no_grad():
-            IoU_val = inference_ds(ds_val, model.eval(), sam, transform, epoch, args)
-            if IoU_val > best:
-                torch.save(model, args['path_best'])
-                best = IoU_val
-                print('best results: ' + str(best))
-                f_best.write(str(epoch) + ',' + str(best) + '\n')
-                f_best.flush()
+        if ds_val.dataset is not None:
+            with torch.no_grad():
+                IoU_val = inference_ds(ds_val, model.eval(), sam, transform, epoch, args)
+                if IoU_val > best:
+                    torch.save(model, args['path_best'])
+                    best = IoU_val
+                    print('best results: ' + str(best))
+                    f_best.write(str(epoch) + ',' + str(best) + '\n')
+                    f_best.flush()
+        else:
+            torch.save(model, args['path'])
+            # we save the epoch number so we can know where we stopped 
+            # eventhough its not the best model
+            f_best.write(str(epoch) + ',' + str(0) + '\n')
+            f_best.flush()
+
 
 
 if __name__ == '__main__':
@@ -304,5 +312,11 @@ if __name__ == '__main__':
         },
         'gpu_id': 0,
     }
+    # save to json file all the info of the current run 
+    run_info = {"run_name": args['run_name']}
+    run_info['args'] = args
+    run_info["sam_args"] = sam_args
+    with open(os.path.join(run_output_path, 'run_info.json'), 'w') as f:
+        json.dump(run_info, f)
     main(args=args, sam_args=sam_args)
 

@@ -70,5 +70,5 @@ class NpyDataset(Dataset):
     
 def get_npy_dataset(data_root):
     ds_train = NpyDataset(data_root)
-    ds_test = ds_train # currenly same as train TODO change this
+    ds_test = None
     return ds_train, ds_test
