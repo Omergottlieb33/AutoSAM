@@ -282,24 +282,9 @@ if __name__ == '__main__':
                                      'net_best.pth')
     args['vis_folder'] = os.path.join(run_output_path, 'vis')
     os.makedirs(args['vis_folder'], exist_ok=True)
-    # sam_args = {
-    #     'sam_checkpoint': "cp/sam_vit_h.pth",
-    #     'model_type': "vit_h",
-    #     'generator_args': {
-    #         'points_per_side': 8,
-    #         'pred_iou_thresh': 0.95,
-    #         'stability_score_thresh': 0.7,
-    #         'crop_n_layers': 0,
-    #         'crop_n_points_downscale_factor': 2,
-    #         'min_mask_region_area': 0,
-    #         'point_grids': None,
-    #         'box_nms_thresh': 0.7,
-    #     },
-    #     'gpu_id': 0,
-    # }
     sam_args = {
-        'sam_checkpoint': "cp/sam_vit_b.pth",
-        'model_type': "vit_b",
+        'sam_checkpoint': "cp/sam_vit_h.pth",
+        'model_type': "vit_h",
         'generator_args': {
             'points_per_side': 8,
             'pred_iou_thresh': 0.95,
@@ -312,6 +297,21 @@ if __name__ == '__main__':
         },
         'gpu_id': 0,
     }
+    # sam_args = {
+    #     'sam_checkpoint': "cp/sam_vit_b.pth",
+    #     'model_type': "vit_b",
+    #     'generator_args': {
+    #         'points_per_side': 8,
+    #         'pred_iou_thresh': 0.95,
+    #         'stability_score_thresh': 0.7,
+    #         'crop_n_layers': 0,
+    #         'crop_n_points_downscale_factor': 2,
+    #         'min_mask_region_area': 0,
+    #         'point_grids': None,
+    #         'box_nms_thresh': 0.7,
+    #     },
+    #     'gpu_id': 0,
+    # }
     # save to json file all the info of the current run 
     run_info = {"run_name": args['run_name']}
     run_info['args'] = args
