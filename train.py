@@ -4,14 +4,17 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 import os
+import json
 import numpy as np
 from models.model_single import ModelEmb
 from dataset.glas import get_glas_dataset
 from dataset.MoNuBrain import get_monu_dataset
 from dataset.polyp import get_polyp_dataset, get_tests_polyp_dataset
+from dataset.npydataset import get_npy_dataset
 from segment_anything import SamPredictor, sam_model_registry, SamAutomaticMaskGenerator
 from segment_anything.utils.transforms import ResizeLongestSide
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
 
 
 def norm_batch(x):
@@ -90,7 +93,7 @@ def postprocess_masks(masks_dict):
     return masks, ious
 
 
-def train_single_epoch(ds, model, sam, optimizer, transform, epoch):
+def train_single_epoch(ds, model, sam, optimizer, transform, epoch, debug, output_path=None):
     loss_list = []
     pbar = tqdm(ds)
     criterion = nn.BCELoss()
@@ -99,6 +102,34 @@ def train_single_epoch(ds, model, sam, optimizer, transform, epoch):
     for ix, (imgs, gts, original_sz, img_sz) in enumerate(pbar):
         orig_imgs = imgs.to(sam.device)
         gts = gts.to(sam.device)
+
+        if debug:
+            # create batch image with GT mask for epoch visualization
+            os.makedirs(output_path, exist_ok=True)
+            fig, axes = plt.subplots((len(orig_imgs) + 1) // 2, 2, figsize=(10, 5*len(orig_imgs)))
+            
+            for i, img in enumerate(orig_imgs):
+                ax = axes[i // 2, i % 2]
+                img = img.squeeze().permute(1, 2, 0).cpu().numpy()
+                img = (img - np.min(img)) / (np.max(img) - np.min(img))  # Normalize image values
+                gt = gts[i].squeeze().cpu().numpy()
+                # draw the segmentation mask in light green
+                img[gt > 0] = img[gt > 0] * 0.5 + 0.5 * np.array([0, 1, 0])
+                # draw white bounding box around the GT mask
+                y_indices, x_indices = np.where(gt > 0)
+                x_min, x_max = np.min(x_indices), np.max(x_indices)
+                y_min, y_max = np.min(y_indices), np.max(y_indices)
+                rect = plt.Rectangle((x_min, y_min), x_max - x_min, y_max - y_min, edgecolor='white', facecolor='none')
+                ax.add_patch(rect)
+                ax.imshow(img)
+            # Remove empty subplots
+            for i in range(len(orig_imgs), len(axes.flatten())):
+                fig.delaxes(axes.flatten()[i])
+
+            img_output_path = os.path.join(output_path, 'batch' + str(ix) + '.png')
+            plt.savefig(img_output_path)
+            plt.close(fig)
+
         orig_imgs_small = F.interpolate(orig_imgs, (Idim, Idim), mode='bilinear', align_corners=True)
         dense_embeddings = model(orig_imgs_small)
         batched_input = get_input_dict(orig_imgs, original_sz, img_sz)
@@ -146,12 +177,12 @@ def inference_ds(ds, model, sam, transform, epoch, args):
                 epoch=epoch,
                 dice=np.mean(dice_list),
                 iou=np.mean(iou_list)))
-    model.train()
     return np.mean(iou_list)
 
 
 def sam_call(batched_input, sam, dense_embeddings):
     with torch.no_grad():
+        print ("sam_call")
         input_images = torch.stack([sam.preprocess(x["image"]) for x in batched_input], dim=0)
         image_embeddings = sam.image_encoder(input_images)
         sparse_embeddings_none, dense_embeddings_none = sam.prompt_encoder(points=None, boxes=None, masks=None)
@@ -182,24 +213,42 @@ def main(args=None, sam_args=None):
     elif args['task'] == 'glas':
         trainset, testset = get_glas_dataset(args, sam_trans=transform)
     elif args['task'] == 'polyp':
+        print ("getting polyp dataset")
         trainset, testset = get_polyp_dataset(args, sam_trans=transform)
+        print ("got polyp dataset")
+    elif args['task'] == 'FLARE22Train':
+        trainset, testset = get_npy_dataset('CT_Abd')
+
     ds = torch.utils.data.DataLoader(trainset, batch_size=int(args['Batch_size']), shuffle=True,
                                      num_workers=int(args['nW']), drop_last=True)
+    print ("ds loaded, loading val ds")
     ds_val = torch.utils.data.DataLoader(testset, batch_size=1, shuffle=False,
                                          num_workers=int(args['nW_eval']), drop_last=False)
+    print ("all ds loaded")
     best = 0
-    path_best = 'results/gpu' + str(args['folder']) + '/best.csv'
+    path_best = os.path.join(args['run_output_path'], 'best.csv')
     f_best = open(path_best, 'w')
+    print ("start training")
     for epoch in range(int(args['epoches'])):
-        train_single_epoch(ds, model.train(), sam.eval(), optimizer, transform, epoch)
-        with torch.no_grad():
-            IoU_val = inference_ds(ds_val, model.eval(), sam, transform, epoch, args)
-            if IoU_val > best:
-                torch.save(model, args['path_best'])
-                best = IoU_val
-                print('best results: ' + str(best))
-                f_best.write(str(epoch) + ',' + str(best) + '\n')
-                f_best.flush()
+        single_epoch_output_path = os.path.join(args['run_output_path'], 'epoch' + str(epoch))
+        train_single_epoch(ds, model.train(), sam.eval(), optimizer, transform, epoch, 
+                           args['debug'], output_path=single_epoch_output_path)
+        if ds_val.dataset is not None:
+            with torch.no_grad():
+                IoU_val = inference_ds(ds_val, model.eval(), sam, transform, epoch, args)
+                if IoU_val > best:
+                    torch.save(model, args['path_best'])
+                    best = IoU_val
+                    print('best results: ' + str(best))
+                    f_best.write(str(epoch) + ',' + str(best) + '\n')
+                    f_best.flush()
+        else:
+            torch.save(model, args['path'])
+            # we save the epoch number so we can know where we stopped 
+            # eventhough its not the best model
+            f_best.write(str(epoch) + ',' + str(0) + '\n')
+            f_best.flush()
+
 
 
 if __name__ == '__main__':
@@ -218,18 +267,21 @@ if __name__ == '__main__':
     parser.add_argument('-rotate', '--rotate', default=22, help='image size', required=False)
     parser.add_argument('-scale1', '--scale1', default=0.75, help='image size', required=False)
     parser.add_argument('-scale2', '--scale2', default=1.25, help='image size', required=False)
+    parser.add_argument('--debug', action='store_true', help='debug mode', required=False)
+    parser.add_argument('--run_name', help='run name, its mendaotry as we need easy way to tell between runs',
+                         required=True)
     args = vars(parser.parse_args())
-    os.makedirs('results', exist_ok=True)
-    folder = open_folder('results')
-    args['folder'] = folder
-    args['path'] = os.path.join('results',
-                                'gpu' + folder,
+    run_output_path = os.path.join('results', args['run_name'])
+    args['run_output_path'] = run_output_path
+    os.makedirs(run_output_path, exist_ok=True)
+    # folder = open_folder('results')  # stop with the orig GPU counting. maybe later use.
+    # args['folder'] = folder
+    args['path'] = os.path.join(run_output_path,
                                 'net_last.pth')
-    args['path_best'] = os.path.join('results',
-                                     'gpu' + folder,
+    args['path_best'] = os.path.join(run_output_path,
                                      'net_best.pth')
-    args['vis_folder'] = os.path.join('results', 'gpu' + args['folder'], 'vis')
-    os.mkdir(args['vis_folder'])
+    args['vis_folder'] = os.path.join(run_output_path, 'vis')
+    os.makedirs(args['vis_folder'], exist_ok=True)
     sam_args = {
         'sam_checkpoint': "cp/sam_vit_h.pth",
         'model_type': "vit_h",
@@ -245,5 +297,26 @@ if __name__ == '__main__':
         },
         'gpu_id': 0,
     }
+    # sam_args = {
+    #     'sam_checkpoint': "cp/sam_vit_b.pth",
+    #     'model_type': "vit_b",
+    #     'generator_args': {
+    #         'points_per_side': 8,
+    #         'pred_iou_thresh': 0.95,
+    #         'stability_score_thresh': 0.7,
+    #         'crop_n_layers': 0,
+    #         'crop_n_points_downscale_factor': 2,
+    #         'min_mask_region_area': 0,
+    #         'point_grids': None,
+    #         'box_nms_thresh': 0.7,
+    #     },
+    #     'gpu_id': 0,
+    # }
+    # save to json file all the info of the current run 
+    run_info = {"run_name": args['run_name']}
+    run_info['args'] = args
+    run_info["sam_args"] = sam_args
+    with open(os.path.join(run_output_path, 'run_info.json'), 'w') as f:
+        json.dump(run_info, f)
     main(args=args, sam_args=sam_args)
 
