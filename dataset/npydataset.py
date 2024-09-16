@@ -6,19 +6,29 @@ import numpy as np
 from torch.utils.data import Dataset
 
 class NpyDataset(Dataset):
-    def __init__(self, data_root, bbox_shift=20):
+    def __init__(self, data_root, desired_label: int=1, bbox_shift=20):
         self.data_root = data_root
+        self.derired_label = desired_label
         self.gt_path = os.path.join(data_root, "gts")
         self.img_path = os.path.join(data_root, "imgs")
         self.gt_path_files = sorted(
             glob.glob(os.path.join(self.gt_path, "**/*.npy"), recursive=True)
         )
+        ## we want filter Gts with specific label
+        # todo: have this list first in preprocessing so we don't have to load all the files in runtime
+        self.gt_path_files = [
+            file
+            for file in self.gt_path_files
+            if np.unique(np.load(file)).tolist()[1] in [desired_label]
+        ]
         self.gt_path_files = [
             file
             for file in self.gt_path_files
             if os.path.isfile(os.path.join(self.img_path, os.path.basename(file)))
         ]
         self.bbox_shift = bbox_shift
+
+
         print(f"number of images: {len(self.gt_path_files)}")
 
     def __len__(self):
@@ -42,8 +52,10 @@ class NpyDataset(Dataset):
             "img gt name error" + self.gt_path_files[index] + self.npy_files[index]
         )
         label_ids = np.unique(gt)[1:]
+        # random_label = random.choice(label_ids.tolist())
+        # print ("random_label: ", random_label)
         gt2D = np.uint8(
-            gt == random.choice(label_ids.tolist())
+            gt == self.derired_label
         )  # only one label, (256, 256)
         assert np.max(gt2D) == 1 and np.min(gt2D) == 0.0, "ground truth should be 0, 1"
         y_indices, x_indices = np.where(gt2D > 0)
@@ -79,34 +91,40 @@ def get_npy_dataset(data_root=None, test_data_root=None):
         ds_test = None
     return ds_train, ds_test
 
-# def copy_only_images_with_gt(data_root):
-#     gt_path = os.path.join(data_root, "gts")
-#     img_path = os.path.join(data_root, "imgs")
-#     gt_path_files = sorted(
-#         glob.glob(os.path.join(gt_path, "**/*.npy"), recursive=True)
-#     )
-#     gt_path_files = [
-#         file
-#         for file in gt_path_files
-#         if os.path.isfile(os.path.join(img_path, os.path.basename(file)))
-#     ]
-#     print(f"number of images: {len(gt_path_files)}")
-    
-#     output_dir_path = os.path.join(data_root, 'imgs_with_gt')
-#     os.makedirs(output_dir_path, exist_ok=True)
-#     for file in tqdm(gt_path_files, desc="Copying images with ground truth"):
-#         img_name = os.path.basename(file)
-#         orig_img_path = os.path.join(img_path, img_name)
-#         output_img_path = os.path.join(output_dir_path, img_name)
-#         # copy the image to the new folder
-#         os.system(f"cp {orig_img_path} {output_img_path}")
+def draw_data(data_root):
+    import matplotlib.pyplot as plt
 
-# if __name__ == '__main__':
-#     from tqdm import tqdm
-#     import argparse
+    ds_to_draw, ds_none = get_npy_dataset(data_root=data_root)
+    ds = torch.utils.data.DataLoader(ds_to_draw, batch_size=1, shuffle=True,
+                                     num_workers=1, drop_last=True)
+    pbar = tqdm(ds)
+    for i, (imgs, gts, original_sz, img_sz) in enumerate(pbar):
+        print ("imgs shape: ", imgs.shape, "gts shape: ", gts.shape, "original_sz: ", original_sz, "img_sz: ", img_sz)
+        img = imgs.squeeze().permute(1, 2, 0).cpu().numpy()
+        img = (img - np.min(img)) / (np.max(img) - np.min(img))  # Normalize image values
+        gt = gts[0].squeeze().cpu().numpy()
+        plt.imshow(img, cmap='gray')
+        plt.imshow(gt, cmap='Reds', alpha=0.5)
+        plt.title(f" {i+1} of {len(pbar)}")
+        plt.show()
 
-#     parser = argparse.ArgumentParser(description='Description of your program')
-#     parser.add_argument('--npy_path', default='data/npy', required=False)
-#     args = vars(parser.parse_args())
 
-#     copy_only_images_with_gt(args['npy_path'])
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data_root', type=str,
+                        help='data root', required=False, default='/media/tal/tal_ssd/datasets/npy/CT_Abd')
+    parser.add_argument('--debug', action='store_true', help='debug mode', required=False)
+
+    return parser.parse_args()
+
+if __name__ == '__main__':
+    from tqdm import tqdm
+    import argparse
+
+    parser = argparse.ArgumentParser()
+
+    args = parse_args()
+    draw_data(args.data_root)
+
+
