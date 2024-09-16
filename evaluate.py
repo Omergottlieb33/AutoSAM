@@ -8,7 +8,7 @@ from typing import Dict
 import torch.utils.data
 import torch.nn.functional as F
 
-from inference import inference_ds
+from train import inference_ds
 from models.model_single import ModelEmb
 from dataset.glas import get_glas_dataset
 from dataset.polyp import get_polyp_dataset
@@ -25,18 +25,20 @@ def evaluate(task_to_eval: str, model_path: str, sam_args: Dict,
              evaluation_data_root: str = None,
              num_workers: int = 1, idim: int = 512,
              output_dir: str = 'results/evaluation',
-             eval_name: str = 'evaluation'):
+             eval_name: str = 'evaluation',
+             debug=False):
     
     # prepare output directory and file name
-    os.makedirs(output_dir, exist_ok=True)
+    current_evaluation_output_dir = os.path.join(output_dir, eval_name)
+    os.makedirs(current_evaluation_output_dir, exist_ok=True)
     # filename should by eval_name.json, if elready exists, create another file with a number suffix
     json_file_name = f"{eval_name}.json"
     existing_files = [f for f in os.listdir(
-        output_dir) if f.startswith(eval_name) and f.endswith('.json')]
+        current_evaluation_output_dir) if f.startswith(eval_name) and f.endswith('.json')]
     if len(existing_files) > 0:
         file_num = len(existing_files) + 1
         json_file_name = f"{eval_name}_{file_num}.json"
-    json_results_path = os.path.join(output_dir, json_file_name)
+    json_results_path = os.path.join(current_evaluation_output_dir, json_file_name)
     eval_args = {
         "eval_name": eval_name,
         "task": task_to_eval,
@@ -44,8 +46,15 @@ def evaluate(task_to_eval: str, model_path: str, sam_args: Dict,
         "model_path": model_path,
         "sam_args": sam_args,
     }
+
+    inference_args = {"Idim": idim,
+            "task": task_to_eval,
+            "depth_wise": False,  
+            "order": 85}
+    
     pre_results_json = {
         "eval_args": eval_args,
+        "inference_args": inference_args,
         "results": "WIP"
     }
     with open(json_results_path, "w") as f:
@@ -67,7 +76,7 @@ def evaluate(task_to_eval: str, model_path: str, sam_args: Dict,
     ds_val = torch.utils.data.DataLoader(testset, batch_size=1, shuffle=False,
                                          num_workers=num_workers, drop_last=False)
     
-    model = ModelEmb(args=args).to(device=device)
+    model = ModelEmb(args=inference_args).to(device=device)
     model1 = torch.load(model_path)
     model.load_state_dict(model1.state_dict())
     sam = sam_model_registry[sam_args['model_type']](
@@ -76,12 +85,12 @@ def evaluate(task_to_eval: str, model_path: str, sam_args: Dict,
     sam.eval()
     transform = ResizeLongestSide(sam.image_encoder.img_size)
 
-    inference_args = {"Idim": idim,
-            "task": task_to_eval}
 
     with torch.no_grad():
         model.eval()
-        IoU_val = inference_ds(ds_val, sam, transform, 0, inference_args)
+        IoU_val = inference_ds(ds=ds_val, model=model, sam=sam, transform=transform, 
+                               epoch=0, args=inference_args, 
+                               debug=debug, output_dir_path=current_evaluation_output_dir)
         print("evaluated IoU: ", IoU_val)
 
     # save results
@@ -90,6 +99,7 @@ def evaluate(task_to_eval: str, model_path: str, sam_args: Dict,
             "IoU": IoU_val
         },
         "eval_args": eval_args,
+        "inference_args": inference_args
     }
     with open(json_results_path, "w") as f:
         json.dump(results_json, f)
@@ -169,6 +179,7 @@ def parse_args():
                         help='Idim', required=False)
     parser.add_argument('--output_dir', type=str, default='results/evaluation',
                         help='Output directory', required=False)
+    parser.add_argument('--debug', action='store_true', help='debug mode', required=False)
 
     return parser.parse_args()
 
@@ -187,9 +198,11 @@ if __name__ == '__main__':
     num_workers = args.num_workers
     idim = args.idim
     output_dir = args.output_dir
+    debug = args.debug
 
     sam_args = get_sam_args(sam_model_type=sam_model_type,
                             sam_checkpoint_dir_path=sam_checkpoint_dir_path)
     
     evaluate(task_to_eval=task_to_eval, model_path=model_path, evaluation_data_root=evaluation_data_root,
-             sam_args=sam_args, num_workers=num_workers, idim=idim, output_dir=output_dir, eval_name=eval_name)
+             sam_args=sam_args, num_workers=num_workers, idim=idim, output_dir=output_dir, eval_name=eval_name,
+             debug=debug)

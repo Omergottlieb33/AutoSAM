@@ -146,13 +146,14 @@ def train_single_epoch(ds, model, sam, optimizer, transform, epoch, debug, outpu
     return np.mean(loss_list)
 
 
-def inference_ds(ds, model, sam, transform, epoch, args):
+def inference_ds(ds, model, sam, transform, epoch, args, debug=False, output_dir_path=None):
     pbar = tqdm(ds)
     model.eval()
     iou_list = []
     dice_list = []
     Idim = int(args['Idim'])
-    for imgs, gts, original_sz, img_sz in pbar:
+    for i, (imgs, gts, original_sz, img_sz) in enumerate(pbar):
+
         orig_imgs = imgs.to(sam.device)
         gts = gts.to(sam.device)
         orig_imgs_small = F.interpolate(orig_imgs, (Idim, Idim), mode='bilinear', align_corners=True)
@@ -167,6 +168,30 @@ def inference_ds(ds, model, sam, transform, epoch, args):
         gts = F.interpolate(gts, (Idim, Idim), mode='nearest')
         masks[masks > 0.5] = 1
         masks[masks <= 0.5] = 0
+
+        if debug and output_dir_path is not None:
+            os.makedirs(output_dir_path, exist_ok=True)
+            img = orig_imgs_small[0].squeeze().permute(1, 2, 0).cpu().numpy()
+            img = (img - np.min(img)) / (np.max(img) - np.min(img))  # Normalize image values
+            # create a single image with GT mask for epoch visualization
+            fig, ax = plt.subplots(figsize=(10, 10))
+            gt = gts[0].squeeze().cpu().numpy()
+            # draw the segmentation mask in light green
+            img[gt > 0] = img[gt > 0] * 0.5 + 0.5 * np.array([0, 1, 0])
+            # draw white bounding box around the GT mask
+            y_indices, x_indices = np.where(gt > 0)
+            x_min, x_max = np.min(x_indices), np.max(x_indices)
+            y_min, y_max = np.min(y_indices), np.max(y_indices)
+            rect = plt.Rectangle((x_min, y_min), x_max - x_min, y_max - y_min, edgecolor='white', facecolor='none')
+            ax.add_patch(rect)
+            # draw the segmentation mask in red
+            mask = masks[0].squeeze().detach().cpu().numpy()
+            img[mask > 0] = img[mask > 0] * 0.5 + 0.5 * np.array([1, 0, 0])
+            ax.imshow(img)
+            img_output_path = os.path.join(output_dir_path, 'inference_img_' + str(i) + '.png')
+            plt.savefig(img_output_path)
+            plt.close(fig)
+
         dice, ji = get_dice_ji(masks.squeeze().detach().cpu().numpy(),
                                gts.squeeze().detach().cpu().numpy())
         iou_list.append(ji)
@@ -282,24 +307,9 @@ if __name__ == '__main__':
                                      'net_best.pth')
     args['vis_folder'] = os.path.join(run_output_path, 'vis')
     os.makedirs(args['vis_folder'], exist_ok=True)
-    sam_args = {
-        'sam_checkpoint': "cp/sam_vit_h.pth",
-        'model_type': "vit_h",
-        'generator_args': {
-            'points_per_side': 8,
-            'pred_iou_thresh': 0.95,
-            'stability_score_thresh': 0.7,
-            'crop_n_layers': 0,
-            'crop_n_points_downscale_factor': 2,
-            'min_mask_region_area': 0,
-            'point_grids': None,
-            'box_nms_thresh': 0.7,
-        },
-        'gpu_id': 0,
-    }
     # sam_args = {
-    #     'sam_checkpoint': "cp/sam_vit_b.pth",
-    #     'model_type': "vit_b",
+    #     'sam_checkpoint': "cp/sam_vit_h.pth",
+    #     'model_type': "vit_h",
     #     'generator_args': {
     #         'points_per_side': 8,
     #         'pred_iou_thresh': 0.95,
@@ -312,6 +322,21 @@ if __name__ == '__main__':
     #     },
     #     'gpu_id': 0,
     # }
+    sam_args = {
+        'sam_checkpoint': "cp/sam_vit_b.pth",
+        'model_type': "vit_b",
+        'generator_args': {
+            'points_per_side': 8,
+            'pred_iou_thresh': 0.95,
+            'stability_score_thresh': 0.7,
+            'crop_n_layers': 0,
+            'crop_n_points_downscale_factor': 2,
+            'min_mask_region_area': 0,
+            'point_grids': None,
+            'box_nms_thresh': 0.7,
+        },
+        'gpu_id': 0,
+    }
     # save to json file all the info of the current run 
     run_info = {"run_name": args['run_name']}
     run_info['args'] = args
