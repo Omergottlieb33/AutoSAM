@@ -68,7 +68,45 @@ class NpyDataset(Dataset):
         tensor_image_size = tensor_original_size
         return preprocessed_img, preprocessed_mask, tensor_original_size, tensor_image_size
     
-def get_npy_dataset(data_root):
-    ds_train = NpyDataset(data_root)
-    ds_test = None
+def get_npy_dataset(data_root=None, test_data_root=None):
+    if data_root:
+        ds_train = NpyDataset(data_root)
+    else:
+        ds_train = None
+    if test_data_root:
+        ds_test = NpyDataset(test_data_root)
+    else:
+        ds_test = None
     return ds_train, ds_test
+
+# def copy_only_images_with_gt(data_root):
+#     gt_path = os.path.join(data_root, "gts")
+#     img_path = os.path.join(data_root, "imgs")
+#     gt_path_files = sorted(
+#         glob.glob(os.path.join(gt_path, "**/*.npy"), recursive=True)
+#     )
+#     gt_path_files = [
+#         file
+#         for file in gt_path_files
+#         if os.path.isfile(os.path.join(img_path, os.path.basename(file)))
+#     ]
+#     print(f"number of images: {len(gt_path_files)}")
+    
+#     output_dir_path = os.path.join(data_root, 'imgs_with_gt')
+#     os.makedirs(output_dir_path, exist_ok=True)
+#     for file in tqdm(gt_path_files, desc="Copying images with ground truth"):
+#         img_name = os.path.basename(file)
+#         orig_img_path = os.path.join(img_path, img_name)
+#         output_img_path = os.path.join(output_dir_path, img_name)
+#         # copy the image to the new folder
+#         os.system(f"cp {orig_img_path} {output_img_path}")
+
+# if __name__ == '__main__':
+#     from tqdm import tqdm
+#     import argparse
+
+#     parser = argparse.ArgumentParser(description='Description of your program')
+#     parser.add_argument('--npy_path', default='data/npy', required=False)
+#     args = vars(parser.parse_args())
+
+#     copy_only_images_with_gt(args['npy_path'])
