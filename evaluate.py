@@ -26,7 +26,8 @@ def evaluate(task_to_eval: str, model_path: str, sam_args: Dict,
              num_workers: int = 1, idim: int = 512,
              output_dir: str = 'results/evaluation',
              eval_name: str = 'evaluation',
-             debug=False):
+             debug=False,
+             inference_w_gt_as_mask=False):
     
     # prepare output directory and file name
     current_evaluation_output_dir = os.path.join(output_dir, eval_name)
@@ -45,6 +46,11 @@ def evaluate(task_to_eval: str, model_path: str, sam_args: Dict,
         "evaluation_data_root": evaluation_data_root,
         "model_path": model_path,
         "sam_args": sam_args,
+        "num_workers": num_workers,
+        "idim": idim,
+        "output_dir": output_dir,
+        "debug": debug,
+        "inference_w_gt_as_mask": inference_w_gt_as_mask
     }
 
     inference_args = {"Idim": idim,
@@ -61,6 +67,16 @@ def evaluate(task_to_eval: str, model_path: str, sam_args: Dict,
         json.dump(pre_results_json, f)
 
 
+    
+    model = ModelEmb(args=inference_args).to(device=device)
+    model1 = torch.load(model_path)
+    model.load_state_dict(model1.state_dict())
+    sam = sam_model_registry[sam_args['model_type']](
+        checkpoint=sam_args['sam_checkpoint'])
+    sam.to(device=device)
+    sam.eval()
+    transform = ResizeLongestSide(sam.image_encoder.img_size)
+
     if task_to_eval == 'monu':
         trainset, testset = get_monu_dataset(args, sam_trans=transform)
         evaluation_data_root = 'MoNuSeg'
@@ -75,22 +91,13 @@ def evaluate(task_to_eval: str, model_path: str, sam_args: Dict,
                                             test_data_root=evaluation_data_root)
     ds_val = torch.utils.data.DataLoader(testset, batch_size=1, shuffle=False,
                                          num_workers=num_workers, drop_last=False)
-    
-    model = ModelEmb(args=inference_args).to(device=device)
-    model1 = torch.load(model_path)
-    model.load_state_dict(model1.state_dict())
-    sam = sam_model_registry[sam_args['model_type']](
-        checkpoint=sam_args['sam_checkpoint'])
-    sam.to(device=device)
-    sam.eval()
-    transform = ResizeLongestSide(sam.image_encoder.img_size)
-
 
     with torch.no_grad():
         model.eval()
         IoU_val = inference_ds(ds=ds_val, model=model, sam=sam, transform=transform, 
                                epoch=0, args=inference_args, 
-                               debug=debug, output_dir_path=current_evaluation_output_dir)
+                               debug=debug, output_dir_path=current_evaluation_output_dir,
+                               inference_w_gt_as_mask=inference_w_gt_as_mask)
         print("evaluated IoU: ", IoU_val)
 
     # save results
@@ -177,6 +184,8 @@ def parse_args():
                         help='Number of workers', required=False)
     parser.add_argument('--idim', type=int, default=512,
                         help='Idim', required=False)
+    parser.add_argument('--inference_w_gt_as_mask', action='store_true', 
+                        help='inference_w_gt_as_mask', required=False)
     parser.add_argument('--output_dir', type=str, default='results/evaluation',
                         help='Output directory', required=False)
     parser.add_argument('--debug', action='store_true', help='debug mode', required=False)
@@ -199,10 +208,11 @@ if __name__ == '__main__':
     idim = args.idim
     output_dir = args.output_dir
     debug = args.debug
+    inference_w_gt_as_mask = args.inference_w_gt_as_mask
 
     sam_args = get_sam_args(sam_model_type=sam_model_type,
                             sam_checkpoint_dir_path=sam_checkpoint_dir_path)
     
     evaluate(task_to_eval=task_to_eval, model_path=model_path, evaluation_data_root=evaluation_data_root,
              sam_args=sam_args, num_workers=num_workers, idim=idim, output_dir=output_dir, eval_name=eval_name,
-             debug=debug)
+             debug=debug, inference_w_gt_as_mask=inference_w_gt_as_mask)

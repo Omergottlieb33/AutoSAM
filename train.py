@@ -66,17 +66,19 @@ def gen_step(optimizer, gts, masks, criterion, accumulation_steps, step):
     return loss.item()
 
 
-def get_input_dict(imgs, original_sz, img_sz):
+def get_input_dict(imgs, original_sz, img_sz, gts=None):
     batched_input = []
     for i, img in enumerate(imgs):
         input_size = tuple([int(x) for x in img_sz[i].squeeze().tolist()])
         original_size = tuple([int(x) for x in original_sz[i].squeeze().tolist()])
+        gt = gts[i]
         singel_input = {
             'image': img,
             'original_size': original_size,
             'image_size': input_size,
             'point_coords': None,
             'point_labels': None,
+            'gt_mask': gt
         }
         batched_input.append(singel_input)
     return batched_input
@@ -146,7 +148,8 @@ def train_single_epoch(ds, model, sam, optimizer, transform, epoch, debug, outpu
     return np.mean(loss_list)
 
 
-def inference_ds(ds, model, sam, transform, epoch, args, debug=False, output_dir_path=None):
+def inference_ds(ds, model, sam, transform, epoch, args, inference_w_gt_as_mask=False, 
+                 debug=False, output_dir_path=None):
     pbar = tqdm(ds)
     model.eval()
     iou_list = []
@@ -158,8 +161,9 @@ def inference_ds(ds, model, sam, transform, epoch, args, debug=False, output_dir
         gts = gts.to(sam.device)
         orig_imgs_small = F.interpolate(orig_imgs, (Idim, Idim), mode='bilinear', align_corners=True)
         dense_embeddings = model(orig_imgs_small)
-        batched_input = get_input_dict(orig_imgs, original_sz, img_sz)
-        masks = norm_batch(sam_call(batched_input, sam, dense_embeddings))
+        batched_input = get_input_dict(orig_imgs, original_sz, img_sz, gts)
+        masks = norm_batch(sam_call(batched_input, sam, dense_embeddings, 
+                                    take_gt_as_mask=inference_w_gt_as_mask))
         input_size = tuple([int(x) for x in img_sz[0].squeeze().tolist()])
         original_size = tuple([int(x) for x in original_sz[0].squeeze().tolist()])
         masks = sam.postprocess_masks(masks, input_size=input_size, original_size=original_size)
@@ -205,16 +209,35 @@ def inference_ds(ds, model, sam, transform, epoch, args, debug=False, output_dir
     return np.mean(iou_list)
 
 
-def sam_call(batched_input, sam, dense_embeddings):
+def sam_call(batched_input, sam, dense_embeddings_from_model, take_gt_as_mask=False):
     with torch.no_grad():
         print ("sam_call")
         input_images = torch.stack([sam.preprocess(x["image"]) for x in batched_input], dim=0)
         image_embeddings = sam.image_encoder(input_images)
-        sparse_embeddings_none, dense_embeddings_none = sam.prompt_encoder(points=None, boxes=None, masks=None)
+        if take_gt_as_mask:
+            input_gts = torch.stack([x["gt_mask"] for x in batched_input], dim=0)
+            bboxes = []
+            for i in range(input_gts.shape[0]):
+                y_indices, x_indices = torch.where(input_gts[i] > 0)
+                x_min, x_max = torch.min(x_indices), torch.max(x_indices)
+                y_min, y_max = torch.min(y_indices), torch.max(y_indices)
+                H, W = input_gts.shape[-2:]
+                x_min = torch.clamp(x_min, 0, W)
+                x_max = torch.clamp(x_max, 0, W)
+                y_min = torch.clamp(y_min, 0, H)
+                y_max = torch.clamp(y_max, 0, H)
+                bboxes.append([x_min, y_min, x_max, y_max])
+            bboxes = torch.tensor(bboxes, device=input_gts.device)
+            sparse_embeddings, dense_embeddings = sam.prompt_encoder(points=None, boxes=bboxes, masks=None)
+        else:
+            sparse_embeddings_none, dense_embeddings_none = sam.prompt_encoder(points=None, boxes=None, masks=None)
+            sparse_embeddings = sparse_embeddings_none
+            dense_embeddings = dense_embeddings_from_model
+
     low_res_masks, iou_predictions = sam.mask_decoder(
         image_embeddings=image_embeddings,
         image_pe=sam.prompt_encoder.get_dense_pe(),
-        sparse_prompt_embeddings=sparse_embeddings_none,
+        sparse_prompt_embeddings=sparse_embeddings,
         dense_prompt_embeddings=dense_embeddings,
         multimask_output=False,
     )
