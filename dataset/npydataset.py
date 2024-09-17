@@ -45,6 +45,9 @@ class NpyDataset(Dataset):
         assert (
             np.max(img_1024) <= 1.0 and np.min(img_1024) >= 0.0
         ), "image should be normalized to [0, 1]"
+        # now have the image bertween [0, 255] as our model expects
+        # this is an addition to the original code
+        img_1024 = np.uint8(img_1024 * 255.0)
         gt = np.load(
             self.gt_path_files[index], "r", allow_pickle=True
         )  # multiple labels [0, 1,4,5...], (256,256)
