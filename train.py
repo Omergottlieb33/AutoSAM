@@ -71,7 +71,10 @@ def get_input_dict(imgs, original_sz, img_sz, gts=None):
     for i, img in enumerate(imgs):
         input_size = tuple([int(x) for x in img_sz[i].squeeze().tolist()])
         original_size = tuple([int(x) for x in original_sz[i].squeeze().tolist()])
-        gt = gts[i]
+        if gts is not None:
+            gt = gts[i]
+        else:
+            gt = None
         singel_input = {
             'image': img,
             'original_size': original_size,
