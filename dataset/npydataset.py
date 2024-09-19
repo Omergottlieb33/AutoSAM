@@ -1,4 +1,5 @@
 import os
+import sys
 import glob
 import json
 import torch
@@ -6,12 +7,17 @@ import random
 import numpy as np
 from tqdm import tqdm
 from torch.utils.data import Dataset
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from dataset.tfs import get_ct_transform
 
 LABELS_METADATA_JSON_FILE_NAME = "labels_metadata.json"
 
+
+
 class NpyDataset(Dataset):
-    def __init__(self, data_root, desired_label: int=1, bbox_shift=20):
+    def __init__(self, data_root, augmentations=None, desired_label: int=1, bbox_shift=20):
         self.data_root = data_root
+        self.augmentations = augmentations
         self.derired_label = desired_label
         self.gt_path = os.path.join(data_root, "gts")
         self.img_path = os.path.join(data_root, "imgs")
@@ -75,6 +81,10 @@ class NpyDataset(Dataset):
             gt == self.derired_label
         )  # only one label, (256, 256)
         assert np.max(gt2D) == 1 and np.min(gt2D) == 0.0, "ground truth should be 0, 1"
+        # apply augmentations
+        if self.augmentations:
+            img_1024, gt2D = self.augmentations(img_1024, gt2D)
+
         y_indices, x_indices = np.where(gt2D > 0)
         x_min, x_max = np.min(x_indices), np.max(x_indices)
         y_min, y_max = np.min(y_indices), np.max(y_indices)
@@ -98,12 +108,13 @@ class NpyDataset(Dataset):
         return preprocessed_img, preprocessed_mask, tensor_original_size, tensor_image_size
     
 def get_npy_dataset(data_root=None, test_data_root=None):
+    transform_train, transform_test = get_ct_transform()
     if data_root:
-        ds_train = NpyDataset(data_root)
+        ds_train = NpyDataset(data_root, augmentations=transform_train)
     else:
         ds_train = None
     if test_data_root:
-        ds_test = NpyDataset(test_data_root)
+        ds_test = NpyDataset(test_data_root, transform_test)
     else:
         ds_test = None
     return ds_train, ds_test
