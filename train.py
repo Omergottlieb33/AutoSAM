@@ -268,8 +268,10 @@ def main(args=None, sam_args=None):
         print ("getting polyp dataset")
         trainset, testset = get_polyp_dataset(args, sam_trans=transform)
         print ("got polyp dataset")
-    elif args['task'] == 'FLARE22Train':
-        trainset, testset = get_npy_dataset('CT_Abd')
+    elif args['task'] == 'CT':
+        train_data_root = args['train_data_root']   
+        test_data_root = args['evaluation_data_root']
+        trainset, testset = get_npy_dataset(train_data_root, test_data_root)
 
     ds = torch.utils.data.DataLoader(trainset, batch_size=int(args['Batch_size']), shuffle=True,
                                      num_workers=int(args['nW']), drop_last=True)
@@ -326,6 +328,11 @@ if __name__ == '__main__':
                     default='vit_b', help='SAM model type', required=False)
     parser.add_argument('--sam_checkpoint_dir_path', type=str, default='cp',
                         help='SAM checkpoint directory path', required=False)
+    parser.add_argument('--train_data_root', type=str,
+                        help='train data root', required=False, default=None)
+    parser.add_argument('--evaluation_data_root', type=str,
+                        help='Evaluation data root', required=False, default=None)
+    
     args = vars(parser.parse_args())
     run_output_path = os.path.join('results', args['run_name'])
     args['run_output_path'] = run_output_path
