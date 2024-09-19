@@ -1,9 +1,13 @@
 import os
 import glob
+import json
 import torch
 import random
 import numpy as np
+from tqdm import tqdm
 from torch.utils.data import Dataset
+
+LABELS_METADATA_JSON_FILE_NAME = "labels_metadata.json"
 
 class NpyDataset(Dataset):
     def __init__(self, data_root, desired_label: int=1, bbox_shift=20):
@@ -14,13 +18,23 @@ class NpyDataset(Dataset):
         self.gt_path_files = sorted(
             glob.glob(os.path.join(self.gt_path, "**/*.npy"), recursive=True)
         )
-        ## we want filter Gts with specific label
-        # todo: have this list first in preprocessing so we don't have to load all the files in runtime
-        self.gt_path_files = [
-            file
-            for file in self.gt_path_files
-            if np.unique(np.load(file)).tolist()[1] in [desired_label]
-        ]
+        ## we want filter GTs with specific label
+        label_json_file_path = os.path.join(data_root, LABELS_METADATA_JSON_FILE_NAME)
+        if os.path.isfile(label_json_file_path):
+            with open(label_json_file_path, "r") as f:
+                labels_metadata = json.load(f)
+            self.gt_path_files = [
+                file
+                for file in self.gt_path_files
+                if os.path.basename(file) in labels_metadata[str(desired_label)]
+            ]
+        else:
+            # if the metadata file does not exist, we will filter the files by the desired label on the fly
+            self.gt_path_files = [
+                file
+                for file in self.gt_path_files
+                if np.unique(np.load(file)).tolist()[1] in [desired_label]
+            ]
         self.gt_path_files = [
             file
             for file in self.gt_path_files
@@ -111,12 +125,48 @@ def draw_data(data_root):
         plt.title(f" {i+1} of {len(pbar)}")
         plt.show()
 
+def create_labels_metadata(data_root):
+    """
+    this function creates a metadata file for the labels in the dataset,
+    i.e it outputs a file so that for each label in the dataset, we have filenames in which that label appears
+    """
+    from collections import defaultdict
+
+    data_root = data_root
+    gt_path = os.path.join(data_root, "gts")
+    img_path = os.path.join(data_root, "imgs")
+    gt_path_files = sorted(
+        glob.glob(os.path.join(gt_path, "**/*.npy"), recursive=True)
+    )
+    gt_path_files = [
+        file
+        for file in gt_path_files
+        if os.path.isfile(os.path.join(img_path, os.path.basename(file)))
+    ]
+    pbar = tqdm(gt_path_files)
+    labels_metadata = defaultdict(list)
+    for i, gt_file_path in enumerate(pbar):
+        gt = np.load(gt_file_path, "r", allow_pickle=True)
+        label_ids = np.unique(gt)[1:]
+        for label in label_ids:
+            labels_metadata[label].append(os.path.basename(gt_file_path))
+    # have labels_metadata so keys sorted by integert then convert to string
+    sorted_labels_metadata = {str(k): v for k, v in dict(sorted(labels_metadata.items())).items()}
+    file_output_path = os.path.join(data_root, LABELS_METADATA_JSON_FILE_NAME)
+    with open(file_output_path, "w") as f:
+        json.dump(sorted_labels_metadata, f)
+
+
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_root', type=str,
                         help='data root', required=False, default='/media/tal/tal_ssd/datasets/npy/CT_Abd')
+    parser.add_argument('--application', type=str,
+                        help='application: draw_data / create_labels_metadata', required=False, default='draw_data')
+    parser.add_argument('--desired_label', type=int,
+                        help='desired label', required=False, default=1)
     parser.add_argument('--debug', action='store_true', help='debug mode', required=False)
 
     return parser.parse_args()
@@ -128,6 +178,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     args = parse_args()
-    draw_data(args.data_root)
+    if args.application == 'draw_data':
+        draw_data(args.data_root)
+    elif args.application == 'create_labels_metadata':
+        create_labels_metadata(args.data_root)
 
 
