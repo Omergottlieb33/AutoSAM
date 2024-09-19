@@ -18,8 +18,6 @@ def main(args):
     modality = args['modality']  # CT or MR
     anatomy = args['anatomy']  # Abd 
     task = args["task"]  # train / val / test
-    img_name_suffix = "_0000.nii.gz"
-    gt_name_suffix = ".nii.gz"
     prefix = modality + "_" + anatomy + "_" + task + "_"
 
     nii_path = args['nii_path']  # path to the nii images
@@ -34,11 +32,25 @@ def main(args):
 
     names = sorted(os.listdir(gt_path))
     print(f"ori \# files {len(names)=}")
-    names = [
-        name
-        for name in names
-        if os.path.exists(join(nii_path, name.split(gt_name_suffix)[0] + img_name_suffix))
-    ]
+
+    dataset = args["dataset"]
+    if dataset == "lits":
+        images_prefix = "volume"
+        gt_prefix = "segmentation"
+        # get names that have both images and ground truth
+        names = [
+            name for name in names if os.path.exists(join(nii_path, images_prefix + name.split(gt_prefix)[1]))
+        ]
+        img_name_suffix = ".nii"
+        gt_name_suffix = ".nii"
+    else:
+        img_name_suffix = "_0000.nii.gz"
+        gt_name_suffix = ".nii.gz"
+        names = [
+            name
+            for name in names
+            if os.path.exists(join(nii_path, name.split(gt_name_suffix)[0] + img_name_suffix))
+        ]
     print(f"after sanity check \# files {len(names)=}")
 
     # set label ids that are excluded
@@ -53,7 +65,10 @@ def main(args):
 
     # %% save preprocessed images and masks as npz files
     for name in tqdm(names[:40]):  # use the remaining 10 cases for validation
-        image_name = name.split(gt_name_suffix)[0] + img_name_suffix
+        if dataset == "lits":
+            image_name = images_prefix + name.split(gt_prefix)[1]
+        else:
+            image_name = name.split(gt_name_suffix)[0] + img_name_suffix
         gt_name = name
         gt_sitk = sitk.ReadImage(join(gt_path, gt_name))
         gt_data_ori = np.uint8(sitk.GetArrayFromImage(gt_sitk))
@@ -194,6 +209,7 @@ if __name__ == '__main__':
     parser.add_argument('--task', default='train', required=False)
     parser.add_argument('--modality', default='CT', required=False)
     parser.add_argument('--anatomy', default='Abd', required=False)
+    parser.add_argument('--dataset', default='', required=False)
     parser.add_argument('--nii_path', default='data/FLARE22Train/images', required=False)
     parser.add_argument('--gt_path', default='data/FLARE22Train/labels', required=False)
     parser.add_argument('--npy_path', default='data/npy', required=False)
