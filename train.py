@@ -210,7 +210,7 @@ def inference_ds(ds, model, sam, transform, epoch, args, inference_w_gt_as_mask=
                 epoch=epoch,
                 dice=np.mean(dice_list),
                 iou=np.mean(iou_list)))
-    return np.mean(iou_list)
+    return np.mean(iou_list), np.mean(dice_list)
 
 
 def sam_call(batched_input, sam, dense_embeddings_from_model, take_gt_as_mask=False):
@@ -272,6 +272,10 @@ def main(args=None, sam_args=None):
         train_data_root = args['train_data_root']   
         test_data_root = args['evaluation_data_root']
         trainset, testset = get_npy_dataset(train_data_root, test_data_root)
+    elif args['task'] == 'acdc':
+        train_data_root = args['train_data_root']   
+        test_data_root = None
+        trainset, testset = get_npy_dataset(train_data_root, test_data_root)
 
     ds = torch.utils.data.DataLoader(trainset, batch_size=int(args['Batch_size']), shuffle=True,
                                      num_workers=int(args['nW']), drop_last=True)
@@ -289,7 +293,7 @@ def main(args=None, sam_args=None):
                            args['debug'], output_path=single_epoch_output_path)
         if ds_val.dataset is not None:
             with torch.no_grad():
-                IoU_val = inference_ds(ds_val, model.eval(), sam, transform, epoch, args)
+                IoU_val, dice_val = inference_ds(ds_val, model.eval(), sam, transform, epoch, args)
                 if IoU_val > best:
                     torch.save(model, args['path_best'])
                     best = IoU_val

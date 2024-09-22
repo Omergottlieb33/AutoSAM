@@ -125,3 +125,18 @@ def get_ct_transform():
     ])
     return transform_train, transform_test
 
+def get_mri_transform():
+    transform_train = transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.RandomVerticalFlip(),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomAffine(90, scale=(0.75, 1.25)),
+        transforms.ToOriginalNP()
+        # transforms.ToTensor(),
+    ])
+    transform_test = transforms.Compose([
+        # transforms.ToPILImage(),
+        # transforms.ToTensor(),
+    ])
+    return transform_train, transform_test
+

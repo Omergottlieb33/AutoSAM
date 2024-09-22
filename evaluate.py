@@ -95,7 +95,7 @@ def evaluate(task_to_eval: str, model_path: str, sam_args: Dict,
 
     with torch.no_grad():
         model.eval()
-        IoU_val = inference_ds(ds=ds_val, model=model, sam=sam, transform=transform, 
+        IoU_val, dice_val = inference_ds(ds=ds_val, model=model, sam=sam, transform=transform, 
                                epoch=0, args=inference_args, 
                                debug=debug, output_dir_path=current_evaluation_output_dir,
                                inference_w_gt_as_mask=inference_w_gt_as_mask)
@@ -104,7 +104,8 @@ def evaluate(task_to_eval: str, model_path: str, sam_args: Dict,
     # save results
     results_json = {
         "results": {
-            "IoU": IoU_val
+            "IoU": IoU_val,
+            "dice": dice_val
         },
         "eval_args": eval_args,
         "inference_args": inference_args

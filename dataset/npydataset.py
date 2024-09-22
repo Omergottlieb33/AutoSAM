@@ -8,7 +8,7 @@ import numpy as np
 from tqdm import tqdm
 from torch.utils.data import Dataset
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from dataset.tfs import get_ct_transform
+from dataset.tfs import get_ct_transform, get_mri_transform
 
 LABELS_METADATA_JSON_FILE_NAME = "labels_metadata.json"
 
@@ -107,8 +107,13 @@ class NpyDataset(Dataset):
         tensor_image_size = tensor_original_size
         return preprocessed_img, preprocessed_mask, tensor_original_size, tensor_image_size
     
-def get_npy_dataset(data_root=None, test_data_root=None):
-    transform_train, transform_test = get_ct_transform()
+def get_npy_dataset(data_root=None, test_data_root=None, transfrom='ct'):
+    if transfrom == 'ct':
+        transform_train, transform_test = get_ct_transform()
+    elif transfrom == 'mri':
+        transform_train, transform_test = get_mri_transform()
+    else:
+        raise ValueError("Invalid transform type")
     if data_root:
         ds_train = NpyDataset(data_root, augmentations=transform_train)
     else:
