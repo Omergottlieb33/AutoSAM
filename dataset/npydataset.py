@@ -11,11 +11,23 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dataset.tfs import get_ct_transform, get_mri_transform
 
 LABELS_METADATA_JSON_FILE_NAME = "labels_metadata.json"
-
+# take is randomly from the data (but constant random seed)
+random.seed(42)
 
 
 class NpyDataset(Dataset):
-    def __init__(self, data_root, augmentations=None, desired_label: int=1, bbox_shift=20):
+    def __init__(self, data_root, augmentations=None, desired_label: int=1, bbox_shift=20,
+                  precentage_for_training=1., use_for_training=True):
+        """
+        Args:
+        data_root: str, path to the root directory of the dataset
+        augmentations: callable, augmentations to apply to the images and masks
+        desired_label: int, the label of the object of interest
+        bbox_shift: int, the maximum shift to apply to the bounding box coordinates
+        precentage_for_training: float, IF we want to divide the data, what is the precentage for training
+        use_for_training: bool, IF we want to divide the data, should we use this for training or testing/validation,
+        if True, we use it for training, otherwise for testing/validation
+        """
         self.data_root = data_root
         self.augmentations = augmentations
         self.derired_label = desired_label
@@ -24,6 +36,19 @@ class NpyDataset(Dataset):
         self.gt_path_files = sorted(
             glob.glob(os.path.join(self.gt_path, "**/*.npy"), recursive=True)
         )
+
+        # take only part of the data for training and the rest for testing/validation
+        if precentage_for_training < 1.:
+
+            sample_size = int(precentage_for_training * len(self.gt_path_files))
+            gt_path_files_for_training = sorted(random.sample(self.gt_path_files, sample_size))
+            gt_path_files_for_validation = sorted(list(set(self.gt_path_files) - set(gt_path_files_for_training)))
+            if use_for_training:
+                self.gt_path_files = gt_path_files_for_training
+            else:
+                self.gt_path_files = gt_path_files_for_validation
+
+
         ## we want filter GTs with specific label
         label_json_file_path = os.path.join(data_root, LABELS_METADATA_JSON_FILE_NAME)
         if os.path.isfile(label_json_file_path):
@@ -107,7 +132,8 @@ class NpyDataset(Dataset):
         tensor_image_size = tensor_original_size
         return preprocessed_img, preprocessed_mask, tensor_original_size, tensor_image_size
     
-def get_npy_dataset(data_root=None, test_data_root=None, transfrom='ct'):
+def get_npy_dataset(data_root=None, test_data_root=None, transfrom='ct', 
+                    precentage_for_training=1., use_for_training=True):
     if transfrom == 'ct':
         transform_train, transform_test = get_ct_transform()
     elif transfrom == 'mri':
@@ -115,11 +141,15 @@ def get_npy_dataset(data_root=None, test_data_root=None, transfrom='ct'):
     else:
         raise ValueError("Invalid transform type")
     if data_root:
-        ds_train = NpyDataset(data_root, augmentations=transform_train)
+        ds_train = NpyDataset(data_root, augmentations=transform_train, 
+                              precentage_for_training=precentage_for_training,
+                              use_for_training=use_for_training)
     else:
         ds_train = None
     if test_data_root:
-        ds_test = NpyDataset(test_data_root, transform_test)
+        ds_test = NpyDataset(test_data_root, transform_test, 
+                              precentage_for_training=precentage_for_training,
+                              use_for_training=use_for_training)
     else:
         ds_test = None
     return ds_train, ds_test

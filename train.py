@@ -274,8 +274,9 @@ def main(args=None, sam_args=None):
         trainset, testset = get_npy_dataset(train_data_root, test_data_root)
     elif args['task'] == 'acdc':
         train_data_root = args['train_data_root']   
-        test_data_root = None
-        trainset, testset = get_npy_dataset(train_data_root, test_data_root)
+        test_data_root = args['evaluation_data_root']
+        trainset, testset = get_npy_dataset(train_data_root, test_data_root, transfrom='mri',
+                                            precentage_for_training=0.8, use_for_training=True)
 
     ds = torch.utils.data.DataLoader(trainset, batch_size=int(args['Batch_size']), shuffle=True,
                                      num_workers=int(args['nW']), drop_last=True)
@@ -336,6 +337,7 @@ if __name__ == '__main__':
                         help='train data root', required=False, default=None)
     parser.add_argument('--evaluation_data_root', type=str,
                         help='Evaluation data root', required=False, default=None)
+    
     
     args = vars(parser.parse_args())
     run_output_path = os.path.join('results', args['run_name'])
