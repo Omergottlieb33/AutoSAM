@@ -16,6 +16,8 @@ from segment_anything import SamPredictor, sam_model_registry, SamAutomaticMaskG
 from segment_anything.utils.transforms import ResizeLongestSide
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import random
+
 
 
 def norm_batch(x):
@@ -213,7 +215,8 @@ def inference_ds(ds, model, sam, transform, epoch, args, inference_w_gt_as_mask=
     return np.mean(iou_list), np.mean(dice_list)
 
 
-def sam_call(batched_input, sam, dense_embeddings_from_model, take_gt_as_mask=False):
+def sam_call(batched_input, sam, dense_embeddings_from_model, take_gt_as_mask=False,
+             bbox_shift=20):
     with torch.no_grad():
         print ("sam_call")
         input_images = torch.stack([sam.preprocess(x["image"]) for x in batched_input], dim=0)
@@ -226,10 +229,10 @@ def sam_call(batched_input, sam, dense_embeddings_from_model, take_gt_as_mask=Fa
                 x_min, x_max = torch.min(x_indices), torch.max(x_indices)
                 y_min, y_max = torch.min(y_indices), torch.max(y_indices)
                 H, W = input_gts.shape[-2:]
-                x_min = torch.clamp(x_min, 0, W)
-                x_max = torch.clamp(x_max, 0, W)
-                y_min = torch.clamp(y_min, 0, H)
-                y_max = torch.clamp(y_max, 0, H)
+                x_min = torch.clamp(x_min - random.randint(0, bbox_shift), 0, W)
+                x_max = torch.clamp(x_max + random.randint(0, bbox_shift), 0, W)
+                y_min = torch.clamp(y_min - random.randint(0, bbox_shift), 0, H)
+                y_max = torch.clamp(y_max + random.randint(0, bbox_shift), 0, H)
                 bboxes.append([x_min, y_min, x_max, y_max])
             bboxes = torch.tensor(bboxes, device=input_gts.device)
             sparse_embeddings, dense_embeddings = sam.prompt_encoder(points=None, boxes=bboxes, masks=None)
