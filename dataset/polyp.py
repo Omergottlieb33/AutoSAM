@@ -8,13 +8,14 @@ import torch
 from dataset.tfs import get_polyp_transform
 import cv2
 
-
 class PolypDataset(data.Dataset):
     """
     dataloader for polyp segmentation tasks
     """
 
     def __init__(self, image_root, gt_root, trainsize=352, augmentations=None, train=True, sam_trans=None):
+        print ("image root: ", image_root)
+        print ("gt root: ", gt_root)
         self.trainsize = trainsize
         self.augmentations = augmentations
         # print(self.augmentations)
@@ -26,6 +27,7 @@ class PolypDataset(data.Dataset):
         self.size = len(self.images)
         self.train = train
         self.sam_trans = sam_trans
+        print ("done init PolypDataset")
 
     def __getitem__(self, index):
         image = self.cv2_loader(self.images[index], is_mask=False)
@@ -42,10 +44,17 @@ class PolypDataset(data.Dataset):
         mask[mask > 0.5] = 1
         mask[mask <= 0.5] = 0
         image_size = tuple(img.shape[1:3])
-        return self.sam_trans.preprocess(img), self.sam_trans.preprocess(mask), torch.Tensor(
-            original_size), torch.Tensor(image_size)
-        # return image, gt
+        # return self.sam_trans.preprocess(img), self.sam_trans.preprocess(mask), torch.Tensor(
+        #     original_size), torch.Tensor(image_size)
 
+        preprocessed_img = self.sam_trans.preprocess(img)
+        preprocessed_mask = self.sam_trans.preprocess(mask)
+        tensor_original_size = torch.Tensor(original_size)
+        tensor_image_size = torch.Tensor(image_size)
+        return preprocessed_img, preprocessed_mask, tensor_original_size, tensor_image_size
+
+        # return image, gt
+        
     def filter_files(self):
         assert len(self.images) == len(self.gts)
         images = []
@@ -98,6 +107,7 @@ def get_polyp_dataset(args, sam_trans=None):
     transform_train, transform_test = get_polyp_transform()
     image_root = 'polyp/TrainDataset/images/'
     gt_root = 'polyp/TrainDataset/masks/'
+    print ("opening PolypDataset instance")
     ds_train = PolypDataset(image_root, gt_root, augmentations=transform_train, sam_trans=sam_trans)
     image_root = 'polyp/TestDataset/test/images/'
     gt_root = 'polyp/TestDataset/test/masks/'
