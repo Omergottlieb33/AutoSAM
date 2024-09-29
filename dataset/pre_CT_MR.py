@@ -11,6 +11,7 @@ join = os.path.join
 from skimage import transform
 from tqdm import tqdm
 import cc3d
+import glob
 
 def main(args):
 
@@ -18,8 +19,6 @@ def main(args):
     modality = args['modality']  # CT or MR
     anatomy = args['anatomy']  # Abd 
     task = args["task"]  # train / val / test
-    img_name_suffix = "_0000.nii.gz"
-    gt_name_suffix = ".nii.gz"
     prefix = modality + "_" + anatomy + "_" + task + "_"
 
     nii_path = args['nii_path']  # path to the nii images
@@ -34,11 +33,50 @@ def main(args):
 
     names = sorted(os.listdir(gt_path))
     print(f"ori \# files {len(names)=}")
-    names = [
-        name
-        for name in names
-        if os.path.exists(join(nii_path, name.split(gt_name_suffix)[0] + img_name_suffix))
-    ]
+
+    dataset = args["dataset"]
+    if dataset == "lits":
+        images_prefix = "volume"
+        gt_prefix = "segmentation"
+        # get names that have both images and ground truth
+        names = [
+            name for name in names if os.path.exists(join(nii_path, images_prefix + name.split(gt_prefix)[1]))
+        ]
+        img_name_suffix = ".nii"
+        gt_name_suffix = ".nii"
+    if dataset == "acdc":
+        assert gt_path == nii_path, "gt_path should be the same as nii_path for ACDC dataset"
+        images_and_gt_parent_dir = nii_path
+        # images  tree is: parent_dir/patient_id/patient<id: 0**>_frame<**>.nii.gz
+        # ground truth tree is: parent_dir/patient_id/patient<id: 0**>_frame<**>_gt.nii.gz
+        # get all gt nii names out if the parent dir 
+        gt_files_nii = glob.glob(join(images_and_gt_parent_dir, "*/*_gt.nii.gz"))
+        # get all gt_names that have corresponding images
+        gt_files_nii = sorted(
+            [ # get the name of the file
+                gt_file_nii
+                for gt_file_nii in gt_files_nii
+                if os.path.exists(
+                    join(
+                        images_and_gt_parent_dir,
+                        os.path.dirname(gt_file_nii),
+                        os.path.basename(gt_file_nii).replace("_gt", ""),
+                    )
+                )
+            ])
+        names = gt_files_nii
+        gt_path = "" # set to empty to alighn with the rest of the flow compatability
+        nii_path = "" # set to empty to alighn with the rest of the flow compatability
+        gt_name_suffix = "_gt.nii.gz"
+        img_name_suffix = ".nii.gz"
+    else:
+        img_name_suffix = "_0000.nii.gz"
+        gt_name_suffix = ".nii.gz"
+        names = [
+            name
+            for name in names
+            if os.path.exists(join(nii_path, name.split(gt_name_suffix)[0] + img_name_suffix))
+        ]
     print(f"after sanity check \# files {len(names)=}")
 
     # set label ids that are excluded
@@ -52,9 +90,29 @@ def main(args):
     WINDOW_WIDTH = 400  # only for CT images
 
     # %% save preprocessed images and masks as npz files
-    for name in tqdm(names[:40]):  # use the remaining 10 cases for validation
-        image_name = name.split(gt_name_suffix)[0] + img_name_suffix
-        gt_name = name
+    if dataset == "acdc":
+        if task == "train":
+            len_names = len(names)
+            # take 80 % precent
+            pbar = tqdm(names[:int(0.8 * len_names)])
+        elif task == "val":
+            # take the 20 % remaining
+            pbar = tqdm(names[int(0.8 * len_names):])
+    else:
+        pbar = tqdm(names[:40]) # use the remaining 10 cases for validation
+    for name in pbar:  
+        if dataset == "lits":
+            image_name = images_prefix + name.split(gt_prefix)[1]
+            gt_name = name
+        elif dataset == "acdc":
+            gt_name = os.path.basename(name)
+            gt_path = name.split(gt_name)[0]
+            image_name = gt_name.replace("_gt", "")
+            nii_path = gt_path
+
+        else:
+            image_name = name.split(gt_name_suffix)[0] + img_name_suffix
+            gt_name = name
         gt_sitk = sitk.ReadImage(join(gt_path, gt_name))
         gt_data_ori = np.uint8(sitk.GetArrayFromImage(gt_sitk))
         # remove label ids
@@ -194,6 +252,7 @@ if __name__ == '__main__':
     parser.add_argument('--task', default='train', required=False)
     parser.add_argument('--modality', default='CT', required=False)
     parser.add_argument('--anatomy', default='Abd', required=False)
+    parser.add_argument('--dataset', default='', required=False)
     parser.add_argument('--nii_path', default='data/FLARE22Train/images', required=False)
     parser.add_argument('--gt_path', default='data/FLARE22Train/labels', required=False)
     parser.add_argument('--npy_path', default='data/npy', required=False)

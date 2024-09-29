@@ -6,6 +6,7 @@ from tqdm import tqdm
 import os
 import json
 import numpy as np
+from utils.sam_utils import get_sam_args
 from models.model_single import ModelEmb
 from dataset.glas import get_glas_dataset
 from dataset.MoNuBrain import get_monu_dataset
@@ -15,6 +16,8 @@ from segment_anything import SamPredictor, sam_model_registry, SamAutomaticMaskG
 from segment_anything.utils.transforms import ResizeLongestSide
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import random
+
 
 
 def norm_batch(x):
@@ -66,17 +69,22 @@ def gen_step(optimizer, gts, masks, criterion, accumulation_steps, step):
     return loss.item()
 
 
-def get_input_dict(imgs, original_sz, img_sz):
+def get_input_dict(imgs, original_sz, img_sz, gts=None):
     batched_input = []
     for i, img in enumerate(imgs):
         input_size = tuple([int(x) for x in img_sz[i].squeeze().tolist()])
         original_size = tuple([int(x) for x in original_sz[i].squeeze().tolist()])
+        if gts is not None:
+            gt = gts[i]
+        else:
+            gt = None
         singel_input = {
             'image': img,
             'original_size': original_size,
             'image_size': input_size,
             'point_coords': None,
             'point_labels': None,
+            'gt_mask': gt
         }
         batched_input.append(singel_input)
     return batched_input
@@ -146,19 +154,22 @@ def train_single_epoch(ds, model, sam, optimizer, transform, epoch, debug, outpu
     return np.mean(loss_list)
 
 
-def inference_ds(ds, model, sam, transform, epoch, args):
+def inference_ds(ds, model, sam, transform, epoch, args, inference_w_gt_as_mask=False, 
+                 debug=False, output_dir_path=None):
     pbar = tqdm(ds)
     model.eval()
     iou_list = []
     dice_list = []
     Idim = int(args['Idim'])
-    for imgs, gts, original_sz, img_sz in pbar:
+    for i, (imgs, gts, original_sz, img_sz) in enumerate(pbar):
+
         orig_imgs = imgs.to(sam.device)
         gts = gts.to(sam.device)
         orig_imgs_small = F.interpolate(orig_imgs, (Idim, Idim), mode='bilinear', align_corners=True)
         dense_embeddings = model(orig_imgs_small)
-        batched_input = get_input_dict(orig_imgs, original_sz, img_sz)
-        masks = norm_batch(sam_call(batched_input, sam, dense_embeddings))
+        batched_input = get_input_dict(orig_imgs, original_sz, img_sz, gts)
+        masks = norm_batch(sam_call(batched_input, sam, dense_embeddings, 
+                                    take_gt_as_mask=inference_w_gt_as_mask))
         input_size = tuple([int(x) for x in img_sz[0].squeeze().tolist()])
         original_size = tuple([int(x) for x in original_sz[0].squeeze().tolist()])
         masks = sam.postprocess_masks(masks, input_size=input_size, original_size=original_size)
@@ -167,6 +178,30 @@ def inference_ds(ds, model, sam, transform, epoch, args):
         gts = F.interpolate(gts, (Idim, Idim), mode='nearest')
         masks[masks > 0.5] = 1
         masks[masks <= 0.5] = 0
+
+        if debug and output_dir_path is not None:
+            os.makedirs(output_dir_path, exist_ok=True)
+            img = orig_imgs_small[0].squeeze().permute(1, 2, 0).cpu().numpy()
+            img = (img - np.min(img)) / (np.max(img) - np.min(img))  # Normalize image values
+            # create a single image with GT mask for epoch visualization
+            fig, ax = plt.subplots(figsize=(10, 10))
+            gt = gts[0].squeeze().cpu().numpy()
+            # draw the segmentation mask in light green
+            img[gt > 0] = img[gt > 0] * 0.5 + 0.5 * np.array([0, 1, 0])
+            # draw white bounding box around the GT mask
+            y_indices, x_indices = np.where(gt > 0)
+            x_min, x_max = np.min(x_indices), np.max(x_indices)
+            y_min, y_max = np.min(y_indices), np.max(y_indices)
+            rect = plt.Rectangle((x_min, y_min), x_max - x_min, y_max - y_min, edgecolor='white', facecolor='none')
+            ax.add_patch(rect)
+            # draw the segmentation mask in red
+            mask = masks[0].squeeze().detach().cpu().numpy()
+            img[mask > 0] = img[mask > 0] * 0.5 + 0.5 * np.array([1, 0, 0])
+            ax.imshow(img)
+            img_output_path = os.path.join(output_dir_path, 'inference_img_' + str(i) + '.png')
+            plt.savefig(img_output_path)
+            plt.close(fig)
+
         dice, ji = get_dice_ji(masks.squeeze().detach().cpu().numpy(),
                                gts.squeeze().detach().cpu().numpy())
         iou_list.append(ji)
@@ -177,19 +212,39 @@ def inference_ds(ds, model, sam, transform, epoch, args):
                 epoch=epoch,
                 dice=np.mean(dice_list),
                 iou=np.mean(iou_list)))
-    return np.mean(iou_list)
+    return np.mean(iou_list), np.mean(dice_list)
 
 
-def sam_call(batched_input, sam, dense_embeddings):
+def sam_call(batched_input, sam, dense_embeddings_from_model, take_gt_as_mask=False,
+             bbox_shift=20):
     with torch.no_grad():
         print ("sam_call")
         input_images = torch.stack([sam.preprocess(x["image"]) for x in batched_input], dim=0)
         image_embeddings = sam.image_encoder(input_images)
-        sparse_embeddings_none, dense_embeddings_none = sam.prompt_encoder(points=None, boxes=None, masks=None)
+        if take_gt_as_mask:
+            input_gts = torch.stack([x["gt_mask"] for x in batched_input], dim=0)
+            bboxes = []
+            for i in range(input_gts.shape[0]):
+                y_indices, x_indices = torch.where(input_gts[i] > 0)
+                x_min, x_max = torch.min(x_indices), torch.max(x_indices)
+                y_min, y_max = torch.min(y_indices), torch.max(y_indices)
+                H, W = input_gts.shape[-2:]
+                x_min = torch.clamp(x_min - random.randint(0, bbox_shift), 0, W)
+                x_max = torch.clamp(x_max + random.randint(0, bbox_shift), 0, W)
+                y_min = torch.clamp(y_min - random.randint(0, bbox_shift), 0, H)
+                y_max = torch.clamp(y_max + random.randint(0, bbox_shift), 0, H)
+                bboxes.append([x_min, y_min, x_max, y_max])
+            bboxes = torch.tensor(bboxes, device=input_gts.device)
+            sparse_embeddings, dense_embeddings = sam.prompt_encoder(points=None, boxes=bboxes, masks=None)
+        else:
+            sparse_embeddings_none, dense_embeddings_none = sam.prompt_encoder(points=None, boxes=None, masks=None)
+            sparse_embeddings = sparse_embeddings_none
+            dense_embeddings = dense_embeddings_from_model
+
     low_res_masks, iou_predictions = sam.mask_decoder(
         image_embeddings=image_embeddings,
         image_pe=sam.prompt_encoder.get_dense_pe(),
-        sparse_prompt_embeddings=sparse_embeddings_none,
+        sparse_prompt_embeddings=sparse_embeddings,
         dense_prompt_embeddings=dense_embeddings,
         multimask_output=False,
     )
@@ -216,8 +271,15 @@ def main(args=None, sam_args=None):
         print ("getting polyp dataset")
         trainset, testset = get_polyp_dataset(args, sam_trans=transform)
         print ("got polyp dataset")
-    elif args['task'] == 'FLARE22Train':
-        trainset, testset = get_npy_dataset('CT_Abd')
+    elif args['task'] == 'CT':
+        train_data_root = args['train_data_root']   
+        test_data_root = args['evaluation_data_root']
+        trainset, testset = get_npy_dataset(train_data_root, test_data_root)
+    elif args['task'] == 'acdc':
+        train_data_root = args['train_data_root']   
+        test_data_root = args['evaluation_data_root']
+        trainset, testset = get_npy_dataset(train_data_root, test_data_root, transfrom='mri',
+                                            precentage_for_training=0.8, use_for_training=True)
 
     ds = torch.utils.data.DataLoader(trainset, batch_size=int(args['Batch_size']), shuffle=True,
                                      num_workers=int(args['nW']), drop_last=True)
@@ -235,7 +297,7 @@ def main(args=None, sam_args=None):
                            args['debug'], output_path=single_epoch_output_path)
         if ds_val.dataset is not None:
             with torch.no_grad():
-                IoU_val = inference_ds(ds_val, model.eval(), sam, transform, epoch, args)
+                IoU_val, dice_val = inference_ds(ds_val, model.eval(), sam, transform, epoch, args)
                 if IoU_val > best:
                     torch.save(model, args['path_best'])
                     best = IoU_val
@@ -270,6 +332,16 @@ if __name__ == '__main__':
     parser.add_argument('--debug', action='store_true', help='debug mode', required=False)
     parser.add_argument('--run_name', help='run name, its mendaotry as we need easy way to tell between runs',
                          required=True)
+    parser.add_argument('--sam_model_type', type=str,
+                    default='vit_b', help='SAM model type', required=False)
+    parser.add_argument('--sam_checkpoint_dir_path', type=str, default='cp',
+                        help='SAM checkpoint directory path', required=False)
+    parser.add_argument('--train_data_root', type=str,
+                        help='train data root', required=False, default=None)
+    parser.add_argument('--evaluation_data_root', type=str,
+                        help='Evaluation data root', required=False, default=None)
+    
+    
     args = vars(parser.parse_args())
     run_output_path = os.path.join('results', args['run_name'])
     args['run_output_path'] = run_output_path
@@ -282,36 +354,10 @@ if __name__ == '__main__':
                                      'net_best.pth')
     args['vis_folder'] = os.path.join(run_output_path, 'vis')
     os.makedirs(args['vis_folder'], exist_ok=True)
-    sam_args = {
-        'sam_checkpoint': "cp/sam_vit_h.pth",
-        'model_type': "vit_h",
-        'generator_args': {
-            'points_per_side': 8,
-            'pred_iou_thresh': 0.95,
-            'stability_score_thresh': 0.7,
-            'crop_n_layers': 0,
-            'crop_n_points_downscale_factor': 2,
-            'min_mask_region_area': 0,
-            'point_grids': None,
-            'box_nms_thresh': 0.7,
-        },
-        'gpu_id': 0,
-    }
-    # sam_args = {
-    #     'sam_checkpoint': "cp/sam_vit_b.pth",
-    #     'model_type': "vit_b",
-    #     'generator_args': {
-    #         'points_per_side': 8,
-    #         'pred_iou_thresh': 0.95,
-    #         'stability_score_thresh': 0.7,
-    #         'crop_n_layers': 0,
-    #         'crop_n_points_downscale_factor': 2,
-    #         'min_mask_region_area': 0,
-    #         'point_grids': None,
-    #         'box_nms_thresh': 0.7,
-    #     },
-    #     'gpu_id': 0,
-    # }
+
+    sam_args = get_sam_args(sam_model_type=args["sam_model_type"],
+                            sam_checkpoint_dir_path=args["sam_checkpoint_dir_path"])
+
     # save to json file all the info of the current run 
     run_info = {"run_name": args['run_name']}
     run_info['args'] = args

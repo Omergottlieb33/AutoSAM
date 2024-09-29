@@ -28,7 +28,7 @@ __all__ = ["Compose", "ToTensor", "ToPILImage", "Normalize", "Resize", "CenterCr
            "Lambda", "RandomApply", "RandomChoice", "RandomOrder", "RandomCrop", "RandomHorizontalFlip",
            "RandomVerticalFlip", "RandomResizedCrop", "FiveCrop", "TenCrop",
            "ColorJitter", "RandomRotation", "RandomAffine",
-           "RandomPerspective"]
+           "RandomPerspective", "ToOriginalNP"]
 
 _pil_interpolation_to_str = {
     Image.NEAREST: 'PIL.Image.NEAREST',
@@ -63,7 +63,15 @@ class ToPILImage(object):
         self.mode = mode
 
     def __call__(self, img, mask):
+        if img.shape[0] == 3:
+            img = img.transpose(1, 2, 0)
         return F.to_pil_image(img, self.mode), F.to_pil_image(mask, self.mode)
+class ToOriginalNP(object):
+    def __call__(self, img, mask):
+        # transpose to C x H x W
+        img = np.array(img).transpose(2, 0, 1)
+        mask = np.array(mask)
+        return img, mask
 
 
 class Normalize(object):
